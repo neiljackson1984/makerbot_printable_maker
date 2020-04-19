@@ -1,0 +1,16 @@
+buildPath=build
+getFullyQualifiedWindowsStylePath=$(shell cygpath --windows --absolute "$(1)")
+
+
+default:
+	mkdir -p ${buildPath}
+	pipenv run python \
+		"$(call getFullyQualifiedWindowsStylePath,make_printable.py)" \
+		--makerware_path="C:\Program Files\MakerBot\MakerBotPrint\resources\app.asar.unpacked\node_modules\MB-support-plugin\mb_ir\MakerWare" \
+		--input_file="bit_holder.thing" \
+		--output_file="${buildPath}/bit_holder.makerbot" \
+		--miraclegrue_config_file="miracle_config.json"
+		
+
+blarg:		
+	cmd /c "make_printable.bat"
