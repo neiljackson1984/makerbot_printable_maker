@@ -17,7 +17,8 @@ parser.add_argument("--input_file", action='store', nargs=1, required=True, help
 parser.add_argument("--output_file", action='store', nargs=1, required=True, help="the .makerbot file to be created.")
 parser.add_argument("--makerware_path", action='store', nargs=1, required=True, help="the path of the MakerWare folder, which comes with Makerbot Print.")
 parser.add_argument("--miraclegrue_config_file", action='store', nargs=1, required=True, help="The miraclegrue config file.  This may be either a plain old .json file, or an hjson file, which is json with more relaxed syntax, and allows comments.")
-# parser.add_argument("--miraclegrue_config_schema_file", action='store', nargs=1, required=False, help="The miraclegrue config schema file.")
+parser.add_argument("--old_miraclegrue_config_file", action='store', nargs=1, required=False, help="The miraclegrue config file.  This may be either a plain old .json file, or an hjson file, which is json with more relaxed syntax, and allows comments.")
+parser.add_argument("--old_miraclegrue_config_schema_file", action='store', nargs=1, required=False, help="The miraclegrue config schema file of the old version of miracle_grue (to be compared against the schema of the current version of miracle_grue")
 parser.add_argument("--output_annotated_miraclegrue_config_file", action='store', nargs=1, required=False, help="An hjson file to be created by inserting the descriptions from the schema, as comments, interspersed within the miracle_grue_config json entries.")
 
 
@@ -39,7 +40,7 @@ makerware_python_executable_path = makerware_path.joinpath("python3.4.exe").reso
 makerware_python_working_directory_path = makerware_path.joinpath("python34").resolve()
 miracle_grue_executable_path = makerware_path.joinpath("miracle_grue.exe").resolve()
 
-miraclegrue_config = hjson.load(open(miraclegrue_config_file_path ,'r'))
+miraclegrueConfig = hjson.load(open(miraclegrue_config_file_path ,'r'))
 
 def tabbedWrite(file, content, tabLevel=0, tabString="    ", linePrefix=""):
     file.write(
@@ -61,6 +62,27 @@ def prefixAllLines(x, prefix):
 
 def indentAllLines(x, indentString="    "):
     return prefixAllLines(x, indentString)
+
+def makeBlockComment(x):
+    lines = str(x).splitlines()  
+    return "\n".join(
+        ["/* " + lines[0]]
+        + list(
+            map(
+                lambda y: " * " + y,
+                lines[1:]
+            )
+        )
+        + [" */"]
+    )
+
+def addParentheticalRemarkAtEndOfFirstLine(x, remark=None): 
+    lines = str(x).splitlines()
+    return "\n".join(
+        [lines[0] + (" (" + str(remark) + ")" if remark else "")]
+        + lines[1:]
+    )
+
 
 # path is expected to be a list (of keys)
 def getSchemedTypeName(path, schema):
@@ -86,20 +108,27 @@ def getSchemedTypeName(path, schema):
     return None
 
 def getSchemedType(path, schema):
+    # print("getSchemedType() was called with path " + str(path))
     schemedTypeName = getSchemedTypeName(path, schema)
     if schemedTypeName:
         return schema.get(schemedTypeName)
     return None
 
-#entryFormat shall be a streing that is either "dictEntry" or "listEntry"
-def dumpsAnnotatedHjsonEntry(value, path, schema, entryFormat):
-    # print("dumpsAnnotatedHjsonEntry was called with path: " + str(path))
-    schemedTypeName = getSchemedTypeName(path, schema)
-    schemedType = getSchemedType(path, schema)
+def getMemberIds(schemedType):
+    return (
+        map(
+            lambda x: x['id'],
+            schemedType['members']
+        )
+        if (schemedType and schemedType.get('mode') == "aggregate" )
+        else None
+    )
+
+
+#returns the annotation text that is to appear immediately
+# before the entry having the specified path.
+def getAnnotationForEntry(path, schema):
     schemedTypeOfParent = getSchemedType(path[:-1],schema)
-    annotation = None
-    entry = (str(path[-1]) + ": "  if entryFormat == "dictEntry" else "") + dumpsAnnotatedHjsonValue(value, path, schema)
-    
     if schemedTypeOfParent and schemedTypeOfParent['mode'] == "aggregate":
         memberSpec = (
                 list(
@@ -110,8 +139,9 @@ def dumpsAnnotatedHjsonEntry(value, path, schema, entryFormat):
                 ) or [None]
             )[0]
         if memberSpec:
-            annotation = "\n".join(
-                [memberSpec.get('name') or memberSpec.get('id')]  
+            return "\n".join(
+                [path[-1]]
+                + (["name: " + memberSpec.get('name')] if (memberSpec.get('name') and (memberSpec.get('name') != path[-1])) else [])
                 + list(
                     map(
                         lambda k: k + ": " + hjson.dumps(memberSpec[k]),
@@ -122,14 +152,25 @@ def dumpsAnnotatedHjsonEntry(value, path, schema, entryFormat):
                     )
                 )   
             )
-    return ("\n" + prefixAllLines(annotation, "// ") + "\n" if annotation else "") + entry
+        else:
+            return "THIS ELEMENT IS NOT SPECIFIED IN THE SCHEMA."
+    else:
+        return None
+
+#entryFormat shall be a streing that is either "dictEntry" or "listEntry"
+# def dumpsAnnotatedHjsonEntry(value, path, schema, entryFormat):
+#     # print("dumpsAnnotatedHjsonEntry was called with path: " + str(path))
+#     entry = (str(path[-1]) + ": "  if entryFormat == "dictEntry" else "") + dumpsAnnotatedHjsonValue(value, path, schema)
+#     annotation = getAnnotationForEntry(path, schema)
+#     return ("\n" + prefixAllLines(annotation, "// ") + "\n" if annotation else "") + entry
 
 
 def dumpsAnnotatedHjsonValue(value, path, schema):
     # print("now working on path: " + str(path))
     returnValue=""
-    schemedTypeName = getSchemedTypeName(path, schema)
     schemedType = getSchemedType(path, schema)
+    oldSchemedType = getSchemedType(path, oldSchema)
+    
     isIterable = (
         isinstance(value, dict)
         or isinstance(value, list)
@@ -140,16 +181,83 @@ def dumpsAnnotatedHjsonValue(value, path, schema):
     if isIterable:
         if isinstance(value, dict):
             braces=["{","}"]
-            keys=value.keys()
+            keysInValue=set(value.keys())
+            keysInSchema=set(getMemberIds(schemedType) or [])
+            keysInOldSchema=set(getMemberIds(oldSchemedType) or [])
             subentryFormat="dictEntry"
         else:
             braces=["[","]"]
-            keys=range(len(value))
+            keysInValue=set(range(len(value)))
+            keysInSchema=set([])
+            keysInOldSchema=set([])
             subentryFormat="listEntry"
         returnValue += braces[0] + "\n"
-        for key in keys:
+        for key in sorted(list(keysInValue.union(keysInSchema))):
+            annotation = None
+            if key in keysInOldSchema and key not in keysInSchema:
+                annotation = addParentheticalRemarkAtEndOfFirstLine(
+                    getAnnotationForEntry(path + [key], oldSchema),
+                    "DELETED FROM SCHEMA, BUT YOU HAVE STILL SPECIFIED A VALUE"
+                )
+
+
+
+            else:
+                annotation = getAnnotationForEntry(path + [key], schema)
+                if annotation and (key in keysInSchema) and (key not in keysInOldSchema):
+                    annotation = addParentheticalRemarkAtEndOfFirstLine(
+                        annotation,
+                        "NEW IN SCHEMA"
+                    )
+            
+            oldSubValue = (
+                oldMiraclegrueConfig.get(key)
+                if len(path) == 0 else None
+            )
+
+            if key in keysInValue:
+                subValue = value[key]
+                entry = (key + ": "  if subentryFormat == "dictEntry" else "") + dumpsAnnotatedHjsonValue(subValue, path + [key], schema)
+            else:
+                subValue = None
+                entry = "// VALUE NOT SPECIFIED"
+            
             returnValue += indentAllLines(
-                dumpsAnnotatedHjsonEntry(value[key], path + [key], schema, subentryFormat)
+                (
+                    "\n" + makeBlockComment(annotation) + "\n" 
+                    if annotation else ""
+                ) 
+                + entry
+                + (
+                    prefixAllLines(
+                        (
+                            "same as value in old config"
+                            if (subValue!=None and (hjson.loads(hjson.dumps(subValue)) == hjson.loads(hjson.dumps(oldSubValue))))
+                            else "value in old config: " + hjson.dumps(oldSubValue)
+                        ), 
+                        "// "
+                    )
+                    if oldSubValue != None else ""
+                )
+            ) + "\n"
+        for key in sorted(list(keysInOldSchema.difference(keysInSchema))):
+            annotation = addParentheticalRemarkAtEndOfFirstLine(
+                getAnnotationForEntry(path + [key], oldSchema),
+                "DELETED FROM SCHEMA"
+            )
+            oldSubValue = (
+                oldMiraclegrueConfig.get(key)
+                if len(path) == 0 else None
+            )
+            returnValue += indentAllLines(
+                (
+                    "\n" + makeBlockComment(annotation) + "\n" 
+                    if annotation else ""
+                ) 
+                + (
+                    prefixAllLines("value in old config: " + hjson.dumps(oldSubValue), "// ")
+                    if oldSubValue != None else ""
+                )
             ) + "\n"
         returnValue += braces[1] + "\n"
     else:
@@ -170,61 +278,23 @@ if args.output_annotated_miraclegrue_config_file:
         text=True
     )
     schema = json.loads(completedProcess.stdout)
-    
-
+    oldSchema = json.load(open(pathlib.Path(args.old_miraclegrue_config_schema_file[0]).resolve(),'r'))
+    oldMiraclegrueConfig = json.load(open(pathlib.Path(args.old_miraclegrue_config_file[0]).resolve(),'r'))
     annotatedConfigFile = open(pathlib.Path(args.output_annotated_miraclegrue_config_file[0]).resolve() ,'w')
     annotatedConfigFile.write(
         dumpsAnnotatedHjsonValue(
-            value=miraclegrue_config,
+            value=miraclegrueConfig,
             schema=schema,
             path=[]
         )
     )
 
-    # tabLevel=0
-    # #at the moment, I am only going to bother doing this at the top level of the hierarchy
-    # tabbedWrite(file=annotatedConfigFile, tabLevel=tabLevel, content="{")
-    # tabLevel += 1 
-    # # for key in sorted(miraclegrue_config.keys()):
-    # for key in miraclegrue_config.keys():
-    #     schemaEntry = (list(
-    #         filter(
-    #             lambda x: x['id'] == key,
-    #             schema["__top__"]["members"]
-    #         )
-    #     ) or [None])[0]
-    #     # print("type(schemaEntry): " + str(type(schemaEntry)))
-
-    #     if schemaEntry:
-    #         tabbedWrite(file=annotatedConfigFile, tabLevel=tabLevel, linePrefix="//", content=
-    #             (schemaEntry.get('name') or schemaEntry.get('id')) + "\n" + 
-    #             # hjson.dumps(schemaEntry, indent=4)
-    #             "\n".join(
-    #                 list(
-    #                     map(
-    #                         lambda k: k + ": " + hjson.dumps(schemaEntry[k]),
-    #                         filter(
-    #                             lambda k: k not in ['id','name'],
-    #                             schemaEntry.keys()
-    #                         )
-    #                     )
-    #                 ) + [str(type(miraclegrue_config[key]))]
-    #             )
-    #         )
-    #     tabbedWrite(file=annotatedConfigFile, tabLevel=tabLevel, content=
-    #         str(key) + ": " + hjson.dumps(miraclegrue_config[key], indent=4)
-    #     )
-    #     tabbedWrite(file=annotatedConfigFile, tabLevel=tabLevel, content="")
-    #     pass
-
-    # tabLevel -= 1 
-    # tabbedWrite(file=annotatedConfigFile, tabLevel=tabLevel, content="}")
     annotatedConfigFile.close()
     pass
 
 
 temporary_miraclegrue_config_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
-json.dump(miraclegrue_config, temporary_miraclegrue_config_file, sort_keys=True, indent=4)
+json.dump(miraclegrueConfig, temporary_miraclegrue_config_file, sort_keys=True, indent=4)
 temporary_miraclegrue_config_file.close()
 
 temporary_miraclegrue_config_file_path = pathlib.Path(temporary_miraclegrue_config_file.name).resolve()
@@ -240,9 +310,9 @@ subprocessArgs = [
     "--status-updates",
     "--input=" + str(input_file_path) +  "",
     "--output=" + str(output_file_path) +  "",
-    "--machine_id=" + miraclegrue_config['_bot'] + "",
-    "--extruder_ids=" + ",".join(miraclegrue_config['_extruders']) + "",
-    "--material_ids=" + ",".join(miraclegrue_config['_materials']) + "",
+    "--machine_id=" + miraclegrueConfig['_bot'] + "",
+    "--extruder_ids=" + ",".join(miraclegrueConfig['_extruders']) + "",
+    "--material_ids=" + ",".join(miraclegrueConfig['_materials']) + "",
     "--profile=" + str(temporary_miraclegrue_config_file_path) + "" ,
     "slice"
 ]
