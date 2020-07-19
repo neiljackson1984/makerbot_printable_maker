@@ -11,6 +11,12 @@
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "label": "makeAndFail",
+            "type": "shell",
+            "command": "make && exit 1", //we explicitly return a non-zero error code to prevent the vs code debugger from launching when this build task is used as the "preLaunchTask" of a vs code debugging configuration.
+            "group": "build"
         }
     ]
 }

@@ -7,6 +7,9 @@ verify_ssl = true
 
 [packages]
 hjson = "*"
+progress = "*"
+jsondiff = "*"
+jsonschema = "*"
 
 [requires]
 python_version = "3.8"
