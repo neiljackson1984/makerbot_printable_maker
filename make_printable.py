@@ -100,15 +100,15 @@ args, unknownArgs = parser.parse_known_args()
 
 #resolve all of the paths passed as arguments to fully qualified paths:
 input_model_file_path = pathlib.Path(args.input_model_file[0]).resolve()
-output_makerbot_file_path = (pathlib.Path(args.output_makerbot_file[0]).resolve() if args.output_makerbot_file else None)
-output_gcode_file_path = (pathlib.Path(args.output_gcode_file[0]).resolve() if args.output_gcode_file else None)
-output_previewable_gcode_file_path = (pathlib.Path(args.output_previewable_gcode_file[0]).resolve() if args.output_previewable_gcode_file else None)
-output_json_toolpath_file_path = (pathlib.Path(args.output_json_toolpath_file[0]).resolve() if args.output_json_toolpath_file else None)
-output_metadata_file_path = (pathlib.Path(args.output_metadata_file[0]).resolve() if args.output_metadata_file else None)
+output_makerbot_file_path = (pathlib.Path(args.output_makerbot_file[0]).resolve() if args.output_makerbot_file and args.output_makerbot_file[0] else None)
+output_gcode_file_path = (pathlib.Path(args.output_gcode_file[0]).resolve() if args.output_gcode_file and args.output_gcode_file[0] else None)
+output_previewable_gcode_file_path = (pathlib.Path(args.output_previewable_gcode_file[0]).resolve() if args.output_previewable_gcode_file and args.output_previewable_gcode_file[0] else None)
+output_json_toolpath_file_path = (pathlib.Path(args.output_json_toolpath_file[0]).resolve() if args.output_json_toolpath_file and args.output_json_toolpath_file[0] else None)
+output_metadata_file_path = (pathlib.Path(args.output_metadata_file[0]).resolve() if args.output_metadata_file and args.output_metadata_file[0] else None)
 # input_miraclegrue_config_overrides_file_path = (pathlib.Path(args.input_miraclegrue_config_overrides_file[0]).resolve() if args.input_miraclegrue_config_overrides_file else None)
-input_miraclegrue_config_transform_file_path = (pathlib.Path(args.input_miraclegrue_config_transform_file[0]).resolve() if args.input_miraclegrue_config_transform_file else None)
-output_miraclegrue_config_diff_file_path = (pathlib.Path(args.output_miraclegrue_config_diff_file[0]).resolve() if args.output_miraclegrue_config_diff_file else None)
-output_miraclegrue_log_file_path = (pathlib.Path(args.output_miraclegrue_log_file[0]).resolve() if args.output_miraclegrue_log_file else None)
+input_miraclegrue_config_transform_file_path = (pathlib.Path(args.input_miraclegrue_config_transform_file[0]).resolve() if args.input_miraclegrue_config_transform_file and args.input_miraclegrue_config_transform_file[0] else None)
+output_miraclegrue_config_diff_file_path = (pathlib.Path(args.output_miraclegrue_config_diff_file[0]).resolve() if args.output_miraclegrue_config_diff_file and args.output_miraclegrue_config_diff_file[0] else None)
+output_miraclegrue_log_file_path = (pathlib.Path(args.output_miraclegrue_log_file[0]).resolve() if args.output_miraclegrue_log_file and args.output_miraclegrue_log_file[0] else None)
 
 
 makerware_path = pathlib.Path(args.makerware_path[0]).resolve()
@@ -670,6 +670,7 @@ if output_gcode_file_path or output_json_toolpath_file_path or output_metadata_f
 
     if output_metadata_file_path: shutil.copyfile(tempFilePaths["metadata"], output_metadata_file_path)
     if output_json_toolpath_file_path: shutil.copyfile(tempFilePaths["jsontoolpath"], output_json_toolpath_file_path)
+
     if output_gcode_file_path: shutil.copyfile(tempFilePaths["gcode"], output_gcode_file_path)
 
     if output_previewable_gcode_file_path:
