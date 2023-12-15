@@ -364,130 +364,204 @@ def generatePreviewableGcode(inputJsontoolpathFile, outputGcodeFile, progressRep
     # read the jsontoolpath into memory (might it be better to do this in a way that does not require us to read the entire file into memory at once?)
     toolpath = json.load(inputJsontoolpathFile)
     noodleType = None
-    layerNumber = 0
+    layerIndex = -1
+    layerSectionIndex = -1
     lastUpperPosition = None
+    thisUpperPosition = None
     allTags: set = set()
     # allFunctions: set = set()
     
+    weAreInACommentSequence=True
+    commentSequence = None
+    upperPositionPrefix = "Upper Position"
+    layerSectionPrefix = "Layer Section "
+    thisCommentSequenceDeclaresAnUpperPosition = None
+    thisCommentSequenceDeclaresALayerSection = None
+    thisLayerSection = None
+    parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer = []
+    layerSectionsSeenSinceLastLayer = []
+
     for index in range(len(toolpath)):
         # print("now working on item " + str(index))
         item = toolpath[index]
         command = item.get('command')
         if command:
             function = command['function']
-            # allFunctions.add(function)
-            if function == 'move':
-                # look at tags to figure out whether we need to emit a ";TYPE:..." line
-                tags = set(command['tags'])
-                allTags.update(tags)
-
-                # tags encountered in a typical jsontoolpath:
-                #   BeadMode External
-                #   BeadMode Internal
-                #   BeadMode Internal Thick
-                #   BeadMode User3
-                #   Connection
-                #   Infill
-                #   Inset
-                #   Invalid Move
-                #   Leaky Travel Move
-                #   Long Restart
-                #   Restart
-                #   Retract
-                #   Support
-                #   Trailing Extrusion Move
-                #   Travel Move
-
-                # we need to map these (or, more accurately, combinations of these tags) to 
-                # one of the following values for noodleType:
-                # The travel and retract moves are detected implicitly by the cura gcode previewer, so they 
-                # don't have an explicit noodleType (which is one of the reasons I chose the name "noodleType":
-                # these categroies only apply to moves that produce a noodle.
-                #
-                #    WALL-INNER         
-                #    WALL-OUTER         
-                #    SKIN               
-                #    SKIRT              
-                #    SUPPORT            
-                #    FILL              
-                #    SUPPORT-INTERFACE  
-                #    PRIME-TOWER        
-
-
-
-                if "Support" in tags:
-                    thisNoodleType = "SUPPORT"
-                elif "Infill" in tags:
-                    thisNoodleType = "FILL"
-                elif "Inset" in tags:
-                    #there are two possible senses for the words inner/internal and outer/external.  On the one hand, we might be
-                    #  trying to distinguish between faces of holes vs. "outer" faces.  On the other hand, we might be
-                    #  referring to the outermost shell vs. inner shells.
-                    # I am not entirely sure if Cura's concept of WALL-OUTER vs. WALL-INNER is the same as MAkerbot's concept of BeadMode External
-                    
-                    tagsContainingExternal = (tag for tag in tags if "External" in tag)
-                    tagsContainingInternal = (tag for tag in tags if "Internal" in tag)
-                    # print("\n" + str(len(list(tagsContainingExternal)))  + "\t" + str(len(list(tagsContainingInternal))) + "\n")
-                    if tagsContainingExternal:
-                        thisNoodleType = "WALL-OUTER"
-                    elif tagsContainingInternal:
-                        thisNoodleType = "WALL-INNER"
-                    else:
-                        print(
-                            "strangely, at index " + str(index) + " in the json toolpath, we have encountered a \"move\" "
-                            + "command having the \"Inset\" tag where none of the tags contains the word \"External\" "
-                            + "and none of the tags contains the word \"Internal\"."
-                        )
-                        #we'll blindly assume that we are dealing with "WALL-OUTER"
-                        thisNoodleType = "WALL-OUTER"
-                        pass
-                else:
-                    #the default is to assume that noodleType has not changed.
-                    thisNoodleType = noodleType
-
-                #As far as I can tell, there is no good way to detect which moves in the jsontoolpath correspond to Cura's concepts of SKIN, SKIRT, SUPPORT-INTERFACE, and PRIME-TOWER. 
-
-                if thisNoodleType != noodleType:
-                    noodleType =  thisNoodleType
-                    outputGcodeFile.write(";TYPE:" + str(noodleType) + "\n")
-
-                outputGcodeFile.write(
-                    "G1 X{} Y{} Z{} E{} F{}".format(
-                        command['parameters']['x'],
-                        command['parameters']['y'],
-                        command['parameters']['z'],
-                        command['parameters']['a'],
-                        command['parameters']['feedrate'] * 60
-                    ) + "\n"
-                )
-            elif function == 'comment':
+            
+            if function == 'comment' :
+                if not weAreInACommentSequence:
+                    # in this case, we are just entering a comment seuquence.
+                    weAreInACommentSequence = True
+                    thisCommentSequenceDeclaresAnUpperPosition = False
+                    thisCommentSequenceDeclaresALayerSection = False
+                    commentSequence = []
                 comment: str = command['parameters']['comment']
-                outputGcodeFile.write("; " + comment + "\n")
-                upperPositionPrefix = "Upper Position"
+                # outputGcodeFile.write("; " + comment + "\n")
+                commentSequence += ["; " + comment]
 
                 #watch for a comment that looks like "Upper Position  0.05", and, upon change,
                 # increment layer number and emit a ";LAYER:" comment.
                 if comment.startswith(upperPositionPrefix):
-                    thisUpperPosition = float( 
-                        re.search( pattern='[0123456789\.\+\-]+',  string=comment[len(upperPositionPrefix):]   ).group(0)
-                    )   
-                    if thisUpperPosition != lastUpperPosition:
-                        layerNumber += 1
-                        outputGcodeFile.write(";LAYER:" + str(layerNumber) + "\n")
+                    thisCommentSequenceDeclaresAnUpperPosition = True
+                    # thisUpperPosition = float( 
+                    #     re.search( pattern='[0123456789\.\+\-]+',  string=comment[len(upperPositionPrefix):]   ).group(0)
+                    # )   
+                    # some of the upper positions are given as, for instance, 1.51 (+0.26), rather than simply a single floating point number.
+                    # therefore, I will record thisUpperPosition as a string.
+                    thisUpperPosition = comment[len(upperPositionPrefix):].strip()
+                if comment.startswith(layerSectionPrefix):
+                    thisCommentSequenceDeclaresALayerSection = True
+                    thisLayerSection = comment[len(layerSectionPrefix):].strip()
+                    parenthesizedNumberForThisLayerSection = int( 
+                            re.search( pattern='\(\s*(\d+)\s*\)',  string=comment[len(layerSectionPrefix):]  ).group(1)
+                        ) 
+
+
+                # if the next toolpath entry is not a comment (or if this is the last toolpath entry), then emit the accumulated commentSequence
+                if (index+1 > len(toolpath) - 1) or (toolpath[index+1].get('command') and toolpath[index+1].get('command').get('function') != 'comment') :
+                    if thisCommentSequenceDeclaresALayerSection:
+                        layerSectionIndex += 1
+                        commentSequence = [
+                            #the magic comment that the Cura G-code parser will recognize as a layer directive:
+                                ";LAYER:" + str(layerSectionIndex)
+                            ] + commentSequence
+                    # in this case, we have just processed the last line of a comment sequence
+                    if thisCommentSequenceDeclaresAnUpperPosition and (thisUpperPosition != lastUpperPosition): 
+                    # if thisCommentSequenceDeclaresAnUpperPosition: # to suss out what constitutes a "layer section", I am generating a new layer index at each new "layer section", even though the z position does not necessarilly change. 
+                        layerIndex += 1
+                        
+                        commentSequence = (
+                            (  
+                                [
+                                    "; " + "p= " + "[" + ", ".join(  map(str, sorted(set(parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer))  )  ) + "]" + "\t" + "[" + ", ".join(  map(str, parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer  )  ) + "]" 
+                                ]
+                                if parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer else []   
+                            )
+                            + (  
+                                [
+                                    "; " + "layer sections seen on layer " + str((layerIndex + 1) -1) + ": " + " -- ".join(  map(str, map(lambda x: x+1 , [min(layerSectionsSeenSinceLastLayer), max(layerSectionsSeenSinceLastLayer)] )  )  )
+                                ]
+                                if layerSectionsSeenSinceLastLayer else []   
+                            )
+                            + [
+                                # #the magic comment that the Cura G-code parser will recognize as a layer directive:
+                                # ";LAYER:" + str(layerIndex),
+
+                                #a comment that is useful for my own investigation (that has both the layer number and the z coordinate of the layer on one line, for easy reading in search results, and with the layer number matching that displayed in the Cura g-code preview):
+                                # "; LAYER " + str(layerIndex + 1) + "\t" + "Z="+str(thisUpperPosition) + ("\t" + " layer section " + thisLayerSection if thisCommentSequenceDeclaresALayerSection else "")
+                                # "; LAYER " + str(layerIndex + 1) + "\t" + "Z="+str(thisUpperPosition) + ("\t" + "(" + ", ".join(map(str, parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer)) + ")" if parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer else "")
+                                "; LAYER " + str(layerIndex + 1) + "\t" + "Z="+str(thisUpperPosition)   
+
+                                #cura seems to expect the layer indices to start at 0 or lower, but the number that Cura displays in the UI corresponding with the first layer index is always "1".
+                            ] 
+                        ) + commentSequence
+
                         lastUpperPosition = thisUpperPosition
-                    else:
-                        # if we get here, then we must have encountered an  "Upper Position" comment
-                        # with the same value as the last "Upper Position" comment.
-                        pass
-                
-            elif function == 'set_toolhead_temperature':
-                pass
-            elif function == 'toggle_fan':
-                pass
-            elif function == 'fan_duty':
-                pass
+                        parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer = []
+                        layerSectionsSeenSinceLastLayer = []
+                    outputGcodeFile.write("\n".join(commentSequence) + "\n")
+                    if thisCommentSequenceDeclaresALayerSection:
+                        parenthesizedNumbersAfterLayerSectionSeenSinceLastLayer.append(parenthesizedNumberForThisLayerSection)
+                        layerSectionsSeenSinceLastLayer.append(layerSectionIndex)
+
+                        
             else:
-                pass
+                weAreInACommentSequence = False
+                # allFunctions.add(function)
+                if function == 'move':
+                    # look at tags to figure out whether we need to emit a ";TYPE:..." line
+                    tags = set(command['tags'])
+                    allTags.update(tags)
+
+                    # tags encountered in a typical jsontoolpath:
+                    #   BeadMode External
+                    #   BeadMode Internal
+                    #   BeadMode Internal Thick
+                    #   BeadMode User3
+                    #   Connection
+                    #   Infill
+                    #   Inset
+                    #   Invalid Move
+                    #   Leaky Travel Move
+                    #   Long Restart
+                    #   Restart
+                    #   Retract
+                    #   Support
+                    #   Trailing Extrusion Move
+                    #   Travel Move
+
+                    # we need to map these (or, more accurately, combinations of these tags) to 
+                    # one of the following values for noodleType:
+                    # The travel and retract moves are detected implicitly by the cura gcode previewer, so they 
+                    # don't have an explicit noodleType (which is one of the reasons I chose the name "noodleType":
+                    # these categroies only apply to moves that produce a noodle.
+                    #
+                    #    WALL-INNER         
+                    #    WALL-OUTER         
+                    #    SKIN               
+                    #    SKIRT              
+                    #    SUPPORT            
+                    #    FILL              
+                    #    SUPPORT-INTERFACE  
+                    #    PRIME-TOWER        
+
+
+
+                    if "Support" in tags:
+                        thisNoodleType = "SUPPORT"
+                    elif "Infill" in tags:
+                        thisNoodleType = "FILL"
+                    elif "Inset" in tags:
+                        #there are two possible senses for the words inner/internal and outer/external.  On the one hand, we might be
+                        #  trying to distinguish between faces of holes vs. "outer" faces.  On the other hand, we might be
+                        #  referring to the outermost shell vs. inner shells.
+                        # I am not entirely sure if Cura's concept of WALL-OUTER vs. WALL-INNER is the same as MAkerbot's concept of BeadMode External
+                        
+                        tagsContainingExternal = (tag for tag in tags if "External" in tag)
+                        tagsContainingInternal = (tag for tag in tags if "Internal" in tag)
+                        # print("\n" + str(len(list(tagsContainingExternal)))  + "\t" + str(len(list(tagsContainingInternal))) + "\n")
+                        if tagsContainingExternal:
+                            thisNoodleType = "WALL-OUTER"
+                        elif tagsContainingInternal:
+                            thisNoodleType = "WALL-INNER"
+                        else:
+                            print(
+                                "strangely, at index " + str(index) + " in the json toolpath, we have encountered a \"move\" "
+                                + "command having the \"Inset\" tag where none of the tags contains the word \"External\" "
+                                + "and none of the tags contains the word \"Internal\"."
+                            )
+                            #we'll blindly assume that we are dealing with "WALL-OUTER"
+                            thisNoodleType = "WALL-OUTER"
+                            pass
+                    else:
+                        #the default is to assume that noodleType has not changed.
+                        thisNoodleType = noodleType
+
+                    #As far as I can tell, there is no good way to detect which moves in the jsontoolpath correspond to Cura's concepts of SKIN, SKIRT, SUPPORT-INTERFACE, and PRIME-TOWER. 
+
+                    if thisNoodleType != noodleType:
+                        noodleType =  thisNoodleType
+                        outputGcodeFile.write(";TYPE:" + str(noodleType) + "\n")
+
+                    outputGcodeFile.write(
+                        "G1 X{} Y{} Z{} E{} F{}".format(
+                            command['parameters']['x'],
+                            command['parameters']['y'],
+                            command['parameters']['z'],
+                            command['parameters']['a'],
+                            command['parameters']['feedrate'] * 60
+                        ) + "\n"
+                    )
+                elif function == 'set_toolhead_temperature':
+                    pass
+                elif function == 'toggle_fan':
+                    pass
+                elif function == 'fan_duty':
+                    pass
+                else:
+                    pass
+
+
         if progressReportingCallback: progressReportingCallback((index + 1)/len(toolpath))
     # print("\n") 
     # print("encountered the following tags:\n" + indentAllLines("\n".join(sorted(allTags))) + "\n")        
