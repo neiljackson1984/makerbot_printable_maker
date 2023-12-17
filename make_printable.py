@@ -413,7 +413,7 @@ def generatePreviewableGcode(inputJsontoolpathFile, outputGcodeFile, progressRep
                     thisCommentSequenceDeclaresALayerSection = True
                     thisLayerSection = comment[len(layerSectionPrefix):].strip()
                     parenthesizedNumberForThisLayerSection = int( 
-                            re.search( pattern='\(\s*(\d+)\s*\)',  string=comment[len(layerSectionPrefix):]  ).group(1)
+                            re.search( pattern=r'\(\s*(\d+)\s*\)',  string=comment[len(layerSectionPrefix):]  ).group(1)
                         ) 
 
 
